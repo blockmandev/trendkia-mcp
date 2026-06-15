@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: trendkia-mcp
+    runtime: docker
+    plan: free
+    envVars:
+      - key: MCP_TRANSPORT
+        value: http
