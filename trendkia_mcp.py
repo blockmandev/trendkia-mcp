@@ -26,6 +26,7 @@ from xml.etree import ElementTree as ET
 import feedparser
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -95,7 +96,7 @@ def _entry_to_dict(e) -> dict:
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="List recent TrendKia articles", readOnlyHint=True, openWorldHint=True))
 def list_recent_articles(limit: int = 10) -> str:
     """List the most recent TrendKia articles (title, URL, category, date, summary).
 
@@ -120,7 +121,7 @@ def list_recent_articles(limit: int = 10) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Search TrendKia articles", readOnlyHint=True, openWorldHint=True))
 def search_articles(query: str, limit: int = 10) -> str:
     """Search recent TrendKia articles by keyword (matches title, summary, category).
 
@@ -158,7 +159,7 @@ def search_articles(query: str, limit: int = 10) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Get TrendKia article content", readOnlyHint=True, openWorldHint=True))
 def get_article(url: str) -> str:
     """Fetch the full, clean text of one TrendKia article as markdown.
 
@@ -184,7 +185,7 @@ def get_article(url: str) -> str:
     return f"Could not fetch clean content for {url} (.md and .txt both failed)."
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="List TrendKia sitemap URLs", readOnlyHint=True, openWorldHint=True))
 def list_sitemap_urls(limit: int = 100) -> str:
     """List URLs from TrendKia's sitemap.xml (handles nested sitemap indexes).
 
