@@ -31,6 +31,11 @@ from mcp.types import ToolAnnotations
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
+# Server version, tagged in git as v<__version__>. NOTE: this is NOT what a client sees in the MCP
+# initialize handshake — FastMCP 1.x takes no `version` argument, so the version reported there is the
+# mcp library's own (1.27.2 in production). Keep the two straight when reading a client's logs.
+__version__ = "1.1.0"
+
 BASE_URL = os.environ.get("TRENDKIA_BASE_URL", "https://trendkia.com").rstrip("/")
 FEED_URL = f"{BASE_URL}/feed.xml"
 SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
@@ -48,13 +53,16 @@ mcp = FastMCP("trendkia", host=HOST, port=PORT)
 _cache: dict[str, tuple[float, object]] = {}
 
 
-def _http_get(url: str) -> httpx.Response:
+def _http_get(url: str, params: dict | None = None) -> httpx.Response:
     with httpx.Client(
         headers={"User-Agent": USER_AGENT},
         timeout=TIMEOUT,
         follow_redirects=True,
     ) as client:
-        r = client.get(url)
+        # params is passed to httpx rather than interpolated into the URL so the query string is
+        # encoded properly -- Hindi queries are non-ASCII and a raw f-string would produce an
+        # invalid URL for exactly the searches this server exists to serve.
+        r = client.get(url, params=params)
         r.raise_for_status()
         return r
 
@@ -123,39 +131,51 @@ def list_recent_articles(limit: int = 10) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(title="Search TrendKia articles", readOnlyHint=True, openWorldHint=True))
 def search_articles(query: str, limit: int = 10) -> str:
-    """Search recent TrendKia articles by keyword (matches title, summary, category).
+    """Search the whole TrendKia archive by keyword, in Hindi OR English.
 
-    Note: this searches the feed (latest posts). For older content use
-    list_sitemap_urls. Matching is case-insensitive and works for Hindi text too.
+    Queries the site's own search index, so it reaches every published article rather
+    than only the latest ones, and matches Hindi and English headlines, summaries and
+    tags alike -- an English query finds Hindi articles and vice versa.
 
     Args:
-        query: Keyword or phrase to look for.
+        query: Keyword or phrase, Hindi or English.
         limit: Max results to return (1-50). Default 10.
     """
-    q = query.strip().lower()
+    q = query.strip()
     if not q:
         return "Please provide a non-empty search query."
     limit = max(1, min(limit, 50))
 
-    feed = _cached_feed()
-    matches = []
-    for e in feed.entries:
-        d = _entry_to_dict(e)
-        haystack = f"{d['title']} {d['summary']} {d['category']}".lower()
-        if q in haystack:
-            matches.append(d)
-        if len(matches) >= limit:
-            break
+    # The site index, NOT the feed. The feed carries only the ~30 newest posts, so the old
+    # feed-substring search answered "भारत" with 4 hits on an archive of ~29,000 articles and
+    # could never see anything older than about a day. The index is bilingual and archive-wide.
+    try:
+        resp = _http_get(f"{BASE_URL}/api/search", params={"q": q, "limit": limit})
+        results = (resp.json() or {}).get("results", [])
+    except Exception as exc:
+        # Say the search FAILED. Quietly falling back to the feed would answer an archive query
+        # with a handful of today's headlines and look like a thin archive rather than a broken
+        # lookup -- the caller cannot tell those apart, so it must be told.
+        return f"Search is unavailable right now ({type(exc).__name__}). Try again shortly."
 
-    if not matches:
-        return f"No articles in the feed matched '{query}'."
+    if not results:
+        return f"No TrendKia articles matched '{query}'."
 
-    out = [f"# Search results for '{query}' ({len(matches)})\n"]
-    for d in matches:
-        out.append(
-            f"## {d['title']}\n- URL: {d['url']}\n- Category: {d['category'] or 'n/a'}\n"
-            f"- Published: {d['published'] or 'n/a'}\n- Summary: {d['summary'] or 'n/a'}\n"
-        )
+    out = [f"# Search results for '{query}' ({len(results)})\n"]
+    for r in results:
+        url = r.get("href") or ""
+        if url.startswith("/"):
+            url = f"{BASE_URL}{url}"
+        title = r.get("title") or r.get("titleEn") or "(untitled)"
+        line = f"## {title}\n- URL: {url}\n"
+        # Both titles when they differ, so an English-speaking caller can read a Hindi headline.
+        if r.get("titleEn") and r.get("titleEn") != title:
+            line += f"- Title (EN): {r['titleEn']}\n"
+        cat = r.get("cat") or ""
+        cat_en = r.get("catEn") or ""
+        if cat or cat_en:
+            line += f"- Category: {cat}{f' / {cat_en}' if cat_en and cat_en != cat else ''}\n"
+        out.append(line)
     return "\n".join(out)
 
 
