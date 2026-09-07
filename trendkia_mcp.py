@@ -27,6 +27,7 @@ import feedparser
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from mcp.server.transport_security import TransportSecuritySettings
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -34,7 +35,7 @@ from mcp.types import ToolAnnotations
 # Server version, tagged in git as v<__version__>. NOTE: this is NOT what a client sees in the MCP
 # initialize handshake — FastMCP 1.x takes no `version` argument, so the version reported there is the
 # mcp library's own (1.27.2 in production). Keep the two straight when reading a client's logs.
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 BASE_URL = os.environ.get("TRENDKIA_BASE_URL", "https://trendkia.com").rstrip("/")
 FEED_URL = f"{BASE_URL}/feed.xml"
@@ -48,7 +49,23 @@ TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio").lower()
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 
-mcp = FastMCP("trendkia", host=HOST, port=PORT)
+# FastMCP turns on DNS-rebinding protection when bound to localhost, and it accepts only a localhost
+# Host header. Behind a reverse proxy that forwards `Host: trendkia.com` every request is therefore
+# rejected with "Invalid Host header" — i.e. the hosted deployment cannot work without this.
+#
+# This lived ONLY on the production box from June until 2026-09-07, applied by hand and never
+# committed, so the committed code could not actually run behind the proxy it was written for and a
+# `git pull` on that box would have silently taken the public endpoint down. Keeping it in source is
+# what makes the deployment reproducible.
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
+    "MCP_ALLOWED_HOSTS", "trendkia.com,127.0.0.1:*,localhost:*,[::1]:*").split(",") if h.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
+    "MCP_ALLOWED_ORIGINS", "https://trendkia.com,https://claude.ai,https://claude.com").split(",") if o.strip()]
+mcp = FastMCP("trendkia", host=HOST, port=PORT,
+              transport_security=TransportSecuritySettings(
+                  enable_dns_rebinding_protection=True,
+                  allowed_hosts=ALLOWED_HOSTS,
+                  allowed_origins=ALLOWED_ORIGINS))
 
 _cache: dict[str, tuple[float, object]] = {}
 
