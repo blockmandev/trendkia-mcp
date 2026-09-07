@@ -20,7 +20,7 @@ Run:  python trendkia_mcp.py
 
 import os
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from xml.etree import ElementTree as ET
 
 import feedparser
@@ -35,7 +35,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 # Server version, tagged in git as v<__version__>. NOTE: this is NOT what a client sees in the MCP
 # initialize handshake — FastMCP 1.x takes no `version` argument, so the version reported there is the
 # mcp library's own (1.27.2 in production). Keep the two straight when reading a client's logs.
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 BASE_URL = os.environ.get("TRENDKIA_BASE_URL", "https://trendkia.com").rstrip("/")
 FEED_URL = f"{BASE_URL}/feed.xml"
@@ -96,6 +96,50 @@ def _cached_feed():
     return parsed
 
 
+# --------------------------------------------------------------------------- #
+# Language
+# --------------------------------------------------------------------------- #
+# The site publishes every article twice: Hindi at /<section>/<slug>-<id> and English under an /en
+# prefix. DEFAULT_LANG is "en" here because the callers are AI assistants, which overwhelmingly work
+# in English -- note this differs from the WEBSITE's own default of Hindi, and the two are set
+# independently on purpose.
+DEFAULT_LANG = os.environ.get("TRENDKIA_DEFAULT_LANG", "en").strip().lower()
+
+
+def _norm_lang(lang: str | None) -> str:
+    """Any caller input -> 'hi' or 'en'. An unrecognised value falls back to the default rather than
+    raising: a model that invents "english" or "hindi" should still get a usable answer."""
+    v = (lang or "").strip().lower()
+    if v in ("hi", "hindi"):
+        return "hi"
+    if v in ("en", "english"):
+        return "en"
+    return "en" if DEFAULT_LANG == "en" else "hi"
+
+
+def _to_lang(url: str, lang: str) -> str:
+    """Return this article's URL in `lang`, accepting a URL in EITHER language.
+
+    Callers must never have to add or strip the /en prefix themselves. Doing that with string
+    manipulation is where it eventually goes wrong -- a slug containing "/en" mid-path, a trailing
+    slash, a URL that already carries the prefix and gets a second one -- and the caller is the layer
+    least able to notice. So the rewrite lives here, keyed on the path, once.
+    """
+    if not url:
+        return url
+    parts = urlparse(url)
+    path = parts.path
+    if path.startswith("/en/") or path == "/en":
+        path = path[3:] or "/"          # strip -> Hindi form is the bare path
+    if lang == "en":
+        path = "/en" + (path if path.startswith("/") else "/" + path)
+    return urlunparse(parts._replace(path=path))
+
+
+def _other_lang(lang: str) -> str:
+    return "hi" if lang == "en" else "en"
+
+
 def _md_url_for(article_url: str) -> str:
     """Turn an article URL into its clean markdown sibling (`...path.md`)."""
     u = article_url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
@@ -122,46 +166,63 @@ def _entry_to_dict(e) -> dict:
 # Tools
 # --------------------------------------------------------------------------- #
 @mcp.tool(annotations=ToolAnnotations(title="List recent TrendKia articles", readOnlyHint=True, openWorldHint=True))
-def list_recent_articles(limit: int = 10) -> str:
+def list_recent_articles(limit: int = 10, lang: str = "en") -> str:
     """List the most recent TrendKia articles (title, URL, category, date, summary).
+
+    Covers roughly the last 30 posts (the RSS feed). For anything older use search_articles,
+    which reaches the whole archive.
 
     Args:
         limit: How many articles to return (1-50). Default 10.
+        lang: "en" or "hi" -- set this to match the language the user is writing in.
+              Default "en". Each item also carries the other language's URL.
     """
     limit = max(1, min(limit, 50))
+    lang = _norm_lang(lang)
     feed = _cached_feed()
     if not feed.entries:
         return "No articles found in the feed."
 
-    out = [f"# Recent TrendKia articles (showing {min(limit, len(feed.entries))})\n"]
+    out = [f"# Recent TrendKia articles (showing {min(limit, len(feed.entries))}, lang={lang})\n"]
     for e in feed.entries[:limit]:
         d = _entry_to_dict(e)
+        # The feed itself is published in Hindi; the title stays as the feed gives it, but the URL is
+        # rewritten so a caller working in English lands on the English page. Saying so explicitly
+        # beats a URL whose language silently disagrees with the headline beside it.
+        url = _to_lang(d["url"], lang)
         out.append(
             f"## {d['title']}\n"
-            f"- URL: {d['url']}\n"
+            f"- URL: {url}\n"
             f"- Category: {d['category'] or 'n/a'}\n"
             f"- Published: {d['published'] or 'n/a'}\n"
             f"- Summary: {d['summary'] or 'n/a'}\n"
+            f"- Language: {lang}\n"
+            f"- Alternate ({_other_lang(lang)}): {_to_lang(d['url'], _other_lang(lang))}\n"
         )
     return "\n".join(out)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Search TrendKia articles", readOnlyHint=True, openWorldHint=True))
-def search_articles(query: str, limit: int = 10) -> str:
+def search_articles(query: str, limit: int = 10, lang: str = "en") -> str:
     """Search the whole TrendKia archive by keyword, in Hindi OR English.
 
     Queries the site's own search index, so it reaches every published article rather
-    than only the latest ones, and matches Hindi and English headlines, summaries and
-    tags alike -- an English query finds Hindi articles and vice versa.
+    than only the latest ones. The index is bilingual and SHARED, not one index per
+    language: an English query matches Hindi articles and vice versa. `lang` therefore
+    selects which language the RESULTS come back in, not which index is consulted.
 
     Args:
         query: Keyword or phrase, Hindi or English.
         limit: Max results to return (1-50). Default 10.
+        lang: "en" or "hi" -- set this to match the language the user is writing in.
+              Default "en". Each result also carries the other language's URL, so you
+              never need to rewrite a URL yourself.
     """
     q = query.strip()
     if not q:
         return "Please provide a non-empty search query."
     limit = max(1, min(limit, 50))
+    lang = _norm_lang(lang)
 
     # The site index, NOT the feed. The feed carries only the ~30 newest posts, so the old
     # feed-substring search answered "भारत" with 4 hits on an archive of ~29,000 articles and
@@ -178,48 +239,71 @@ def search_articles(query: str, limit: int = 10) -> str:
     if not results:
         return f"No TrendKia articles matched '{query}'."
 
-    out = [f"# Search results for '{query}' ({len(results)})\n"]
+    out = [f"# Search results for '{query}' ({len(results)}, lang={lang})\n"]
     for r in results:
-        url = r.get("href") or ""
-        if url.startswith("/"):
-            url = f"{BASE_URL}{url}"
-        title = r.get("title") or r.get("titleEn") or "(untitled)"
-        line = f"## {title}\n- URL: {url}\n"
-        # Both titles when they differ, so an English-speaking caller can read a Hindi headline.
-        if r.get("titleEn") and r.get("titleEn") != title:
-            line += f"- Title (EN): {r['titleEn']}\n"
-        cat = r.get("cat") or ""
-        cat_en = r.get("catEn") or ""
-        if cat or cat_en:
-            line += f"- Category: {cat}{f' / {cat_en}' if cat_en and cat_en != cat else ''}\n"
+        href = r.get("href") or ""
+        if href.startswith("/"):
+            href = f"{BASE_URL}{href}"
+        url = _to_lang(href, lang)
+        # The English title when the caller asked for English and the site has one; the Hindi
+        # headline is the fallback, because a missing translation must not produce a blank result.
+        hi_t, en_t = r.get("title") or "", r.get("titleEn") or ""
+        title = (en_t or hi_t) if lang == "en" else (hi_t or en_t)
+        line = f"## {title or '(untitled)'}\n- URL: {url}\n"
+        other = (hi_t if lang == "en" else en_t)
+        if other and other != title:
+            line += f"- Title ({_other_lang(lang)}): {other}\n"
+        hi_c, en_c = r.get("cat") or "", r.get("catEn") or ""
+        cat = (en_c or hi_c) if lang == "en" else (hi_c or en_c)
+        if cat:
+            line += f"- Category: {cat}\n"
+        # lang + alternate_url on EVERY item, so the capability is visible from one response and a
+        # caller never has to read the tool description -- or guess -- to find the other language.
+        line += f"- Language: {lang}\n- Alternate ({_other_lang(lang)}): {_to_lang(href, _other_lang(lang))}\n"
         out.append(line)
     return "\n".join(out)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get TrendKia article content", readOnlyHint=True, openWorldHint=True))
-def get_article(url: str) -> str:
-    """Fetch the full, clean text of one TrendKia article as markdown.
+def get_article(url: str, lang: str = "en") -> str:
+    """Fetch the full, clean text of one TrendKia article as markdown, in either language.
 
-    Pass the normal article URL; the server automatically uses the site's clean
-    `.md` version. Falls back to `.txt` if markdown is unavailable.
+    Pass ANY TrendKia article URL, in either language -- the server rewrites it to the
+    language you ask for, so a Hindi URL taken straight from a search result can be read
+    in English with no URL editing on your side. Uses the site's clean `.md` view, falling
+    back to `.txt`.
 
     Args:
-        url: The article URL (e.g. https://trendkia.com/health/...-863).
+        url: The article URL, Hindi or English form -- either is accepted.
+        lang: "en" or "hi" -- set this to match the language the user is writing in.
+              Default "en".
     """
     if not url.strip():
         return "Please provide an article URL."
     if urlparse(url).netloc and urlparse(BASE_URL).netloc not in urlparse(url).netloc:
         return f"Refusing to fetch a URL outside {BASE_URL}."
 
-    md_url = _md_url_for(url)
+    lang = _norm_lang(lang)
+    page_url = _to_lang(url, lang)
+    md_url = _md_url_for(page_url)
     for candidate in (md_url, md_url[:-3] + ".txt"):
         try:
             text = _http_get(candidate).text.strip()
             if text:
-                return f"Source: {candidate}\n\n{text}"
+                # The header states the language and the other language's page URL, so a caller that
+                # asked for the wrong one can correct it from this response alone rather than
+                # rebuilding a URL by hand.
+                return (
+                    f"Source: {candidate}\n"
+                    f"Language: {lang}\n"
+                    f"Alternate ({_other_lang(lang)}): {_to_lang(url, _other_lang(lang))}\n\n"
+                    f"{text}"
+                )
         except httpx.HTTPError:
             continue
-    return f"Could not fetch clean content for {url} (.md and .txt both failed)."
+    # Name the URL actually fetched, not the one passed in: after the language rewrite they differ,
+    # and reporting the caller's URL would point the blame at a URL that was never requested.
+    return f"Could not fetch clean content for {page_url} (.md and .txt both failed)."
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List TrendKia sitemap URLs", readOnlyHint=True, openWorldHint=True))

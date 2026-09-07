@@ -1,6 +1,6 @@
 # TrendKia MCP Server
 
-**Version 1.1.0**
+**Version 1.2.0**
 
 An MCP server that exposes [TrendKia](https://trendkia.com) — a bilingual Hindi/English
 news site — to AI assistants (Claude Desktop, claude.ai custom connectors, Claude Code,
@@ -25,12 +25,32 @@ No API key or auth: it serves only content that is already public on the site.
 
 ## Tools
 
-| Tool | What it returns |
-|---|---|
-| `search_articles` | Keyword search across the **whole archive**, Hindi **or** English. An English query finds Hindi articles and vice versa; results carry both titles and both category names. |
-| `list_recent_articles` | The newest posts, from the RSS feed (~30 most recent). |
-| `get_article` | Full clean markdown of one article. |
-| `list_sitemap_urls` | URLs from `sitemap.xml`, following nested sitemap indexes. |
+| Tool | Arguments | What it returns |
+|---|---|---|
+| `search_articles` | `query, limit, lang` | Keyword search across the **whole archive**. An English query finds Hindi articles and vice versa. |
+| `list_recent_articles` | `limit, lang` | The newest posts, from the RSS feed (~30 most recent). |
+| `get_article` | `url, lang` | Full clean markdown of one article, in either language. |
+| `list_sitemap_urls` | `limit` | URLs from `sitemap.xml`, following nested sitemap indexes. |
+
+### Languages
+
+Every article is published twice — Hindi at `/<section>/<slug>-<id>` and English under `/en`.
+
+`lang` accepts `"en"` or `"hi"` and **defaults to `en`**, since the callers are AI assistants,
+which mostly work in English. (The website's own default is Hindi; the two are set
+independently and deliberately differ.)
+
+Two things make this safe to use:
+
+- **`get_article` accepts a URL in *either* language** and rewrites it to the one you ask for.
+  Pass a Hindi URL straight from a search result and ask for English — no string surgery, which
+  is where URL handling usually goes wrong.
+- **Every result carries `Language:` and `Alternate (…):`**, so the other language is one field
+  away in any single response. You never have to construct a URL or re-read this document.
+
+The search index is **shared, not per-locale** — one full-text index over Hindi *and* English
+headlines, summaries and tags. So `lang` chooses which language the results come back in, not
+which index is consulted. That is why an English query matches Hindi articles.
 
 ### Search vs. recent — the useful distinction
 
@@ -73,6 +93,9 @@ that host is allowed. Set it via the environment rather than patching the code.
 | `PORT` | `8000` | HTTP port |
 | `HOST` | `0.0.0.0` | HTTP bind address |
 | `TRENDKIA_BASE_URL` | `https://trendkia.com` | Site to serve from |
+| `TRENDKIA_DEFAULT_LANG` | `en` | Language used when a caller omits `lang` |
+| `MCP_ALLOWED_HOSTS` | `trendkia.com,127.0.0.1:*,…` | Hosts accepted behind a reverse proxy |
+| `MCP_ALLOWED_ORIGINS` | `https://trendkia.com,https://claude.ai,…` | Allowed browser origins |
 
 ## Requirements
 
