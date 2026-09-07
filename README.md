@@ -32,7 +32,7 @@ No API key or auth: it serves only content that is already public on the site.
 | `search_articles` | `query, limit, lang` | Keyword search across the **whole archive**. An English query finds Hindi articles and vice versa. |
 | `list_recent_articles` | `limit, lang` | The newest posts, from the RSS feed (~30 most recent). |
 | `get_article` | `url, lang` | Full clean markdown of one article, in either language. |
-| `list_sitemap_urls` | `limit` | URLs from `sitemap.xml`, following nested sitemap indexes. |
+| `list_sitemap_urls` | `limit, kind, offset` | Enumerate URLs. `kind="articles"` (default), `"ledger"`, or `"all"`; page with `offset`. |
 
 ### Languages
 
@@ -63,10 +63,15 @@ which index is consulted. That is why an English query matches Hindi articles.
 
 ### Search vs. recent — the useful distinction
 
-`search_articles` queries the site's own full-text index, so it reaches every published
-article, not just the latest ones. `list_recent_articles` reads the RSS feed and is
-therefore limited to roughly the last 30 posts by design — use it for "what's new",
-and `search_articles` for anything else.
+**To find an article, use `search_articles`.** It queries the site's full-text index and
+reaches every published article, however old. `list_recent_articles` reads the RSS feed and
+is limited to roughly the last 30 posts by design — it answers "what's new", nothing else.
+
+`list_sitemap_urls` **enumerates** what exists; it is not a search tool. It defaults to
+`kind="articles"` because the sitemap opens with ~6,900 bribe-ledger state and district
+pages: before 1.3.0 the first 6,995 entries contained no article at all, so at the 1000-URL
+ceiling every possible response was ledger pages and the archive looked unreachable through
+it. Page through with `offset`.
 
 Before 1.1.0 `search_articles` also read the feed, so a query for a common word returned
 only a handful of same-day hits. If you are running an older copy, upgrade.

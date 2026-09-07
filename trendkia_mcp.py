@@ -20,6 +20,7 @@ Run:  python trendkia_mcp.py
 
 import json
 import os
+import re
 import time
 from urllib.parse import urlparse, urlunparse
 from xml.etree import ElementTree as ET
@@ -36,7 +37,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 # Server version, tagged in git as v<__version__>. NOTE: this is NOT what a client sees in the MCP
 # initialize handshake — FastMCP 1.x takes no `version` argument, so the version reported there is the
 # mcp library's own (1.27.2 in production). Keep the two straight when reading a client's logs.
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 BASE_URL = os.environ.get("TRENDKIA_BASE_URL", "https://trendkia.com").rstrip("/")
 FEED_URL = f"{BASE_URL}/feed.xml"
@@ -172,15 +173,30 @@ def _other_lang(lang: str) -> str:
     return "hi" if lang == "en" else "en"
 
 
+# A summary ends with the social hashtags the story was published with (#रुपिया #इंडोनेशिया …).
+# They are display furniture for social posts and pure noise to a reader of this API.
+_TRAILING_HASHTAGS = re.compile(r"(?:\s*#[^\s#]+)+\s*$")
+
+# An article URL ends in -<id>; the site resolves an article from exactly that trailing number.
+_ARTICLE_URL = re.compile(r"-\d{3,}$")
+
+
 def _entry_to_dict(e) -> dict:
+    # The feed emits the CATEGORY first and the article's tags after it, all as <category> elements,
+    # so feedparser hands back one flat list. Joining that whole list into "category" produced
+    # "बाज़ार, मैक्सिकन पेसो, यूएस डॉलर, …, finance" -- the category, the tags and a stray English
+    # slug in one field -- while search_articles reported the same article's category as just
+    # "बाज़ार". Two tools describing one article must not disagree about what "category" means, so
+    # the first term is the category and the remainder are exposed as tags.
+    terms = [t.get("term", "").strip() for t in getattr(e, "tags", []) or []]
+    terms = [t for t in terms if t]
     return {
         "title": getattr(e, "title", "").strip(),
         "url": getattr(e, "link", "").strip(),
-        "category": ", ".join(t.get("term", "") for t in getattr(e, "tags", []))
-        if getattr(e, "tags", None)
-        else getattr(e, "category", ""),
+        "category": terms[0] if terms else getattr(e, "category", ""),
+        "tags": terms[1:],
         "published": getattr(e, "published", ""),
-        "summary": getattr(e, "summary", "").strip(),
+        "summary": _TRAILING_HASHTAGS.sub("", getattr(e, "summary", "").strip()).strip(),
     }
 
 
@@ -213,15 +229,22 @@ def list_recent_articles(limit: int = 10, lang: str = "") -> str:
         # rewritten so a caller working in English lands on the English page. Saying so explicitly
         # beats a URL whose language silently disagrees with the headline beside it.
         url = _to_lang(d["url"], lang)
-        out.append(
+        line = (
             f"## {d['title']}\n"
             f"- URL: {url}\n"
             f"- Category: {d['category'] or 'n/a'}\n"
+        )
+        # Tags as their own field rather than folded into Category, so this tool and
+        # search_articles agree on what "category" means for the same article.
+        if d["tags"]:
+            line += f"- Tags: {', '.join(d['tags'])}\n"
+        line += (
             f"- Published: {d['published'] or 'n/a'}\n"
             f"- Summary: {d['summary'] or 'n/a'}\n"
             f"- Language: {lang}\n"
             f"- Alternate ({_other_lang(lang)}): {_clean(_to_lang(d['url'], _other_lang(lang)))}\n"
         )
+        out.append(line)
     return "\n".join(out)
 
 
@@ -361,13 +384,24 @@ def get_article(url: str, lang: str = "", fmt: str = "md") -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List TrendKia sitemap URLs", readOnlyHint=True, openWorldHint=True))
-def list_sitemap_urls(limit: int = 100) -> str:
+def list_sitemap_urls(limit: int = 100, kind: str = "articles", offset: int = 0) -> str:
     """List URLs from TrendKia's sitemap.xml (handles nested sitemap indexes).
+
+    To FIND an article, use search_articles -- it queries the site's full-text index and
+    reaches the whole archive. This tool is for enumerating what exists, not searching.
 
     Args:
         limit: Max URLs to return (1-1000). Default 100.
+        kind: "articles" (default) lists article pages only; "ledger" lists the
+              bribe-ledger state and district pages; "all" lists everything in
+              sitemap order.
+        offset: Skip this many matching URLs first, to page through the archive.
     """
     limit = max(1, min(limit, 1000))
+    offset = max(0, offset)
+    kind = (kind or "articles").strip().lower()
+    if kind not in ("articles", "ledger", "all"):
+        kind = "articles"
 
     def parse(xml_bytes: str):
         root = ET.fromstring(xml_bytes)
@@ -392,23 +426,46 @@ def list_sitemap_urls(limit: int = 100) -> str:
     except (httpx.HTTPError, ET.ParseError) as exc:
         return f"Could not read sitemap: {exc}"
 
-    # If it's an index, pull child sitemaps until we hit the limit.
+    # Pull EVERY child sitemap before filtering. Stopping at `limit` while reading was safe only when
+    # the caller wanted the first N URLs in file order; with a kind filter the matches may live
+    # anywhere in the file, so a short read would report "none found" for URLs that do exist.
     for child in children:
-        if len(urls) >= limit:
-            break
         try:
             more, _ = parse(_http_get(child).content)
             urls.extend(more)
         except (httpx.HTTPError, ET.ParseError):
             continue
 
-    urls = urls[:limit]
-    if not urls:
-        return "No URLs found in the sitemap."
+    total = len(urls)
+    # WHY THIS FILTER EXISTS. The sitemap opens with ~6,900 bribe-ledger state and district pages, so
+    # the first 6,995 entries contain NOT ONE article. At the 1000-URL ceiling every possible response
+    # was ledger pages, which made the archive look unreachable through this tool no matter what limit
+    # was passed. Articles are the default now, and the ledger -- a different kind of content
+    # entirely -- is opt-in.
+    if kind == "ledger":
+        urls = [(u, mod) for (u, mod) in urls if "/bribe-ledger" in u]
+    elif kind == "articles":
+        # An article URL ends in -<id>, the same rule the site uses to resolve one. Excluding the
+        # ledger alone was not enough: it left the homepage, /about, section and /topic hub pages in
+        # the list, so "articles" would still not have meant articles.
+        urls = [(u, mod) for (u, mod) in urls
+                if "/bribe-ledger" not in u and _ARTICLE_URL.search(urlparse(u).path)]
 
-    out = [f"# Sitemap URLs (showing {len(urls)})\n"]
+    matched = len(urls)
+    urls = urls[offset:offset + limit]
+    if not urls:
+        if matched:
+            return (f"No URLs at offset {offset}: only {matched} match kind={kind!r}. "
+                    f"Use a smaller offset.")
+        return f"No URLs match kind={kind!r} (sitemap holds {total} URLs)."
+
+    shown_to = offset + len(urls)
+    head = f"# Sitemap URLs — kind={kind}, showing {offset + 1}-{shown_to} of {matched}"
+    out = [head + (f" (sitemap total {total})\n" if kind != "all" else "\n")]
     for loc, lastmod in urls:
         out.append(f"- {loc}" + (f"  (lastmod: {lastmod})" if lastmod else ""))
+    if shown_to < matched:
+        out.append(f"\n_{matched - shown_to} more — pass offset={shown_to} for the next page._")
     return "\n".join(out)
 
 
