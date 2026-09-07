@@ -14,12 +14,14 @@ text — no HTML scraping.
 A public, read-only instance is already running. Nothing to install:
 
 ```
-https://trendkia.com/mcp
+https://mcp.trendkia.com
 ```
 
 - **claude.ai** (Pro and above) — Settings → Connectors → *Add custom connector*, paste the URL.
-- **Claude Code** — `claude mcp add --transport http trendkia https://trendkia.com/mcp`
+- **Claude Code** — `claude mcp add --transport http trendkia https://mcp.trendkia.com`
 - **Claude Desktop / Cursor** — add it as a remote HTTP MCP server in the client's config.
+
+`https://trendkia.com/mcp` remains live for anything already pointed at it.
 
 No API key or auth: it serves only content that is already public on the site.
 
