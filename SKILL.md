@@ -29,17 +29,20 @@ for the topics it covers rather than relying on training-data memory.
 - **`list_recent_articles(limit)`** — the newest posts from the feed. Use for
   open requests like "what's trending", "latest news", "anything new on
   TrendKia", or to ground yourself before answering a current-events question.
-- **`search_articles(query, limit)`** — keyword search across the latest feed
-  (title, summary, category). Use when the user names a topic, person, place, or
-  event. Queries work in **Hindi and English** — search with terms in whichever
-  language fits the user's question, and try both if the first returns nothing.
-- **`get_article(url)`** — the full, clean article text (markdown). Use whenever
+- **`search_articles(query, limit, lang)`** — **the way to find anything.** Queries
+  the site's full-text index, so it reaches **every published article however old**,
+  not just recent ones. Use it whenever the user names a topic, person, place or
+  event. The index is bilingual: an English query matches Hindi articles and vice
+  versa, so either language works.
+- **`get_article(url, lang, fmt)`** — the full, clean article text. Use whenever
   the user wants detail, a summary of a specific piece, or facts you intend to
   state precisely. Don't answer substantive questions from the short feed summary
   alone — fetch the article so your answer is grounded in the real content.
-- **`list_sitemap_urls(limit)`** — every URL on the site. Use only for
-  whole-archive browsing or when a topic is older than the recent feed. For most
-  questions, `search_articles` is the better first move.
+  `fmt="json"` returns structured fields instead of prose.
+- **`list_sitemap_urls(limit, kind, offset)`** — enumerates what exists. **Not a
+  search tool — never reach for it to FIND an article.** Use it only to browse or
+  count the archive; `search_articles` reaches older content too, so age is never a
+  reason to come here.
 
 ## Workflow
 
@@ -62,8 +65,9 @@ for the topics it covers rather than relying on training-data memory.
 - **Ground specifics in `get_article`.** Names, numbers, dates, and quotes should
   come from the fetched article, not the one-line summary or your assumptions.
 - **Be honest about gaps.** If `search_articles` returns nothing, say TrendKia
-  doesn't appear to cover it yet rather than inventing an answer. Offer to check
-  the wider archive with `list_sitemap_urls` if it might be older content.
+  doesn't appear to cover it yet rather than inventing an answer. It already
+  searched the whole archive, so there is no wider set to fall back to — try the
+  other language or different terms before concluding the site has no coverage.
 - **Don't fabricate categories or dates.** Report only what the tools return.
 
 ## Examples

@@ -37,7 +37,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 # Server version, tagged in git as v<__version__>. NOTE: this is NOT what a client sees in the MCP
 # initialize handshake — FastMCP 1.x takes no `version` argument, so the version reported there is the
 # mcp library's own (1.27.2 in production). Keep the two straight when reading a client's logs.
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 BASE_URL = os.environ.get("TRENDKIA_BASE_URL", "https://trendkia.com").rstrip("/")
 FEED_URL = f"{BASE_URL}/feed.xml"
@@ -248,14 +248,19 @@ def list_recent_articles(limit: int = 10, lang: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search TrendKia articles", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Search TrendKia (whole archive)", readOnlyHint=True, openWorldHint=True))
 def search_articles(query: str, limit: int = 10, lang: str = "") -> str:
-    """Search the whole TrendKia archive by keyword, in Hindi OR English.
+    """THE way to find a TrendKia article. Searches the WHOLE archive, Hindi or English.
 
-    Queries the site's own search index, so it reaches every published article rather
-    than only the latest ones. The index is bilingual and SHARED, not one index per
-    language: an English query matches Hindi articles and vice versa. `lang` therefore
-    selects which language the RESULTS come back in, not which index is consulted.
+    Use this for any request that names a topic, person, place or event, however old
+    the story might be -- it queries the site's full-text index and reaches every
+    published article, not just recent ones. Do not fall back to list_sitemap_urls when
+    this returns nothing: it has already covered the entire archive, so try the other
+    language or different terms instead.
+
+    The index is bilingual and SHARED, not one index per language: an English query
+    matches Hindi articles and vice versa. `lang` therefore selects which language the
+    RESULTS come back in, not which index is consulted.
 
     Args:
         query: Keyword or phrase, Hindi or English.
@@ -383,7 +388,7 @@ def get_article(url: str, lang: str = "", fmt: str = "md") -> str:
     return f"Could not fetch {page_url + ext}."
 
 
-@mcp.tool(annotations=ToolAnnotations(title="List TrendKia sitemap URLs", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Enumerate TrendKia URLs (not a search)", readOnlyHint=True, openWorldHint=True))
 def list_sitemap_urls(limit: int = 100, kind: str = "articles", offset: int = 0) -> str:
     """List URLs from TrendKia's sitemap.xml (handles nested sitemap indexes).
 
