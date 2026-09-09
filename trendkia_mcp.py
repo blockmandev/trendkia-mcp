@@ -203,7 +203,7 @@ def _entry_to_dict(e) -> dict:
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
-@mcp.tool(annotations=ToolAnnotations(title="List recent TrendKia articles", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="List recent TrendKia articles", readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 def list_recent_articles(limit: int = 10, lang: str = "") -> str:
     """List the most recent TrendKia articles (title, URL, category, date, summary).
 
@@ -248,7 +248,7 @@ def list_recent_articles(limit: int = 10, lang: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search TrendKia (whole archive)", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Search TrendKia (whole archive)", readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 def search_articles(query: str, limit: int = 10, lang: str = "") -> str:
     """THE way to find a TrendKia article. Searches the WHOLE archive, Hindi or English.
 
@@ -318,7 +318,7 @@ def search_articles(query: str, limit: int = 10, lang: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get TrendKia article content", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get TrendKia article content", readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 def get_article(url: str, lang: str = "", fmt: str = "md") -> str:
     """Fetch one TrendKia article as clean markdown, or as structured JSON.
 
@@ -388,7 +388,7 @@ def get_article(url: str, lang: str = "", fmt: str = "md") -> str:
     return f"Could not fetch {page_url + ext}."
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Enumerate TrendKia URLs (not a search)", readOnlyHint=True, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Enumerate TrendKia URLs (not a search)", readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 def list_sitemap_urls(limit: int = 100, kind: str = "articles", offset: int = 0) -> str:
     """List URLs from TrendKia's sitemap.xml (handles nested sitemap indexes).
 
